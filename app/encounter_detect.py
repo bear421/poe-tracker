@@ -156,7 +156,7 @@ def is_expedition(image):
     matches_grey = sorted(matches_grey, key=lambda x: x.distance)
 
     # Define a match threshold
-    match_threshold = 80  # Adjust based on experimentation
+    match_threshold = 90  # Adjust based on experimentation
 
     # Check if sufficient matches are found for either template
     if len(matches_red) > match_threshold:

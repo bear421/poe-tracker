@@ -2,3 +2,6 @@
 /__pycache__
 /encounters
 poe_xp_tracker.json
+config.json
+/app/__pycache__
+/user_data

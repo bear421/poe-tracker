@@ -12,7 +12,7 @@ if %errorlevel% neq 0 (
 )
 
 :: Run the Python script
-python poe_xp_tracker.py
+python app/app.py
 
 :: Pause the window to show any output
 pause
