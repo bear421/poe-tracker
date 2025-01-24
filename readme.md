@@ -1,5 +1,5 @@
 # install python dependencies
-pip install --only-binary :all: numpy opencv-python pillow keyboard mouse pynput pygetwindow pyautogui pyperclip psutil pyttsx3 pyee requests freetype-py scikit-image
+pip install --only-binary :all: numpy opencv-python pillow keyboard mouse pynput pygetwindow pyautogui pyperclip psutil pyttsx3 pyee requests freetype-py scikit-image duckdb pandas pyside6
 
 # ocr dependencies
 pip install --only-binary :all: pytesseract

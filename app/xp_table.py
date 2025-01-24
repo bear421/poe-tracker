@@ -42,6 +42,58 @@ def get_xp_range_for_level(level):
     elif level == max_level:
         return lo, lo
 
+def split_xp_range(range):
+    xp_start, xp_end = range
+    if xp_start < 0 or xp_end < 0:
+        raise ValueError("xp_start and xp_end must be non-negative")
+        
+    ix = bisect.bisect_right(experience_table, xp_start)
+    lo = xp_start
+    ranges = []
+    while ix < len(experience_table):
+        next = experience_table[ix]
+        ix += 1
+        if next > xp_end:
+            next = xp_end
+        if lo == next:
+            break
+        ranges.append((lo, next))
+        lo = next
+        
+    return ranges
+
+def unapply_xp_penalty(penalized_xp_range, area_level):
+    xp_lo, xp_hi = penalized_xp_range
+    lvl_lo, lvl_hi = get_level_from_xp(xp_lo), get_level_from_xp(xp_hi)
+    lvl_ranges = range(lvl_lo, lvl_hi + 1)
+    xp_ranges = split_xp_range((xp_lo, xp_hi))
+
+    unpenalized_xp_values = []
+    for xp_range, lvl in zip(xp_ranges, lvl_ranges):
+        delta = xp_range[1] - xp_range[0]
+        penalty_multiplier = _penalty_formula_maybe_poe2(lvl, area_level)
+        unpenalized_xp_values.append(int(delta / penalty_multiplier))
+
+    return unpenalized_xp_values
+
+def get_xp_penalty_multiplier(character_level, area_level):
+    return _penalty_formula_maybe_poe2(character_level, area_level)
+
+def _penalty_formula_poe1(character_level, area_level):
+    safe_zone = 3 + character_level // 16
+    level_difference = abs(character_level - area_level) - safe_zone
+    if level_difference <= 0:
+        return 1.0
+    return (character_level + 5) / (character_level + 5 + level_difference**2.5) ** 1.5
+
+def _penalty_formula_maybe_poe2(character_level, area_level):
+    safe_zone = 3 + character_level // 16
+    level_difference = abs(character_level - area_level) - safe_zone
+    if level_difference <= 0:
+        return 1.0
+    # very rough guess, probably incorrect
+    return (character_level + 5) / (character_level + 5 + level_difference**3) ** 1.5
+
 # Example Usage
 if __name__ == "__main__":
     # Example XP queries
@@ -53,3 +105,31 @@ if __name__ == "__main__":
     level_query = 99
     xp_range = get_xp_range_for_level(level_query)
     print(f"Level {level_query} has XP range: {xp_range}")
+
+    (a, b) = get_xp_range_for_level(90)
+    print(f"xp_range: {xp_range}")
+    split_xp_ranges = split_xp_range((a - 10000, b + 200))
+    y = b - a
+    k = sum(next - lo for lo, next in split_xp_ranges)
+    print(f"y: {y}, k: {k}")
+    print(f"splits: {split_xp_ranges}")
+
+    # Example usage
+    penalized_xp = 3_000_000_000  # 3B
+    xp_delta = 500_000_000  # XP gain in this snapshot
+    character_level = 90
+    area_level = 80
+
+    unpenalized_values = unapply_xp_penalty(
+        (penalized_xp, penalized_xp + xp_delta), area_level
+    )
+
+    print(f"unpenalized_values: {unpenalized_values}")
+    print(f"unpenalized_values lvl 98: {unapply_xp_penalty(get_xp_range_for_level(98), 80)}")
+    print(f"unpenalized_values lvl 99: {unapply_xp_penalty(get_xp_range_for_level(99), 80)}")
+    print(f"unpenalized_values lvl 99: {unapply_xp_penalty(get_xp_range_for_level(99), 81)}")
+    print(f"unpenalized_values lvl 99: {unapply_xp_penalty(get_xp_range_for_level(99), 82)}")
+    print(f"penalty multiplier lvl 99: {get_xp_penalty_multiplier(99, 79)}")
+    print(f"penalty multiplier lvl 99: {get_xp_penalty_multiplier(99, 80)}")
+    print(f"penalty multiplier lvl 99: {get_xp_penalty_multiplier(99, 81)}")
+    print(f"penalty multiplier lvl 99: {get_xp_penalty_multiplier(99, 82)}")

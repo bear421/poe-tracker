@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 from enum import Enum
 import re
+import uuid
+import json
 
 class ModType(Enum):
     ENCHANT = "enchant"
@@ -55,6 +57,7 @@ class Mod:
 
 @dataclass
 class Item:
+    id: str
     name: str
     base_type: str
     item_class: str
@@ -77,6 +80,7 @@ class Item:
     def to_dict(self) -> Dict:
         """Convert item to dictionary representation."""
         return {
+            "id": self.id,
             "name": self.name,
             "base_type": self.base_type,
             "item_class": self.item_class,
@@ -93,6 +97,7 @@ class Item:
     def from_dict(cls, data: Dict) -> 'Item':
         """Create an Item instance from a dictionary."""
         return cls(
+            id=data["id"],
             name=data["name"],
             base_type=data["base_type"],
             item_class=data["item_class"],
@@ -105,10 +110,15 @@ class Item:
             affixes=[Mod.from_dict(m) for m in data["affixes"]]
         )
 
+    @classmethod
+    def from_row(cls, data: Dict) -> 'Item':
+        return cls.from_dict(json.loads(data))
+
 def parse_item(item_text: str) -> Optional[Item]:
     """Parse item text into an Item object."""
     sections = [s.strip() for s in item_text.split('--------') if s.strip()]
-    
+    if not sections: return None
+
     # Parse header section
     header = [line.strip() for line in re.split(r'\r?\n', sections[0])]
     item_class_match = re.match(r"Item Class: (.+)", header[0])
@@ -125,6 +135,7 @@ def parse_item(item_text: str) -> Optional[Item]:
     
     # Initialize item
     item = Item(
+        id=str(uuid.uuid4()),
         name=name,
         base_type=base_type,
         item_class=item_class,

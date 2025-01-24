@@ -1,6 +1,7 @@
 from item import Item, Mod, ModType
 from dataclasses import dataclass
 import re
+from typing import Optional
 
 @dataclass
 class TI:
@@ -26,6 +27,8 @@ threat_table = {
         TI(0.25, (21, 35)),
     r"(\d+)% increased Monster Cast Speed": 
         TI(0.25, (21, 35)),
+    r"(\d+)% increased Monster Movement Speed": 
+        TI(0.05, (21, 35)),
     r"Monsters deal (\d+)% of Damage as Extra Cold": 
         TI(0.25, (26, 40)),
     r"Monsters deal (\d+)% of Damage as Extra Fire": 
@@ -34,6 +37,16 @@ threat_table = {
         TI(0.25, (26, 40)),
     r"Monsters have (\d+)% increased Stun Buildup": 
         TI(0.1, (20, 30)),
+    r"Monsters have (\d+)% increased Area of Effect": 
+        TI(0.1, (50, 50)),
+    r"Area has patches of Shocked Ground": 
+        TI(0.1, (0, 0)),    
+    r"Area has patches of Chilled Ground": 
+        TI(0.05, (0, 0)),    
+    r"Area has patches of Burning Ground": 
+        TI(0.05, (0, 0)),
+    r"\+(\d+)% Monster Elemental Resistances": 
+        TI(0.05, (40, 50)),
     r"Players are cursed with Enfeeble": 
         TI(0.05, (0, 0)),
     r"Players are cursed with Temporal Chains": 
@@ -45,14 +58,21 @@ threat_table = {
 }
 
 threat_level_hints = [
-    (0, "trivial"),
-    (15, "easy"),
+    (0, "safe"),
+    (15, "low"),
     (20, "medium"),
     (30, "dangerous"),
     (50, "deadly"),
     (150, "lethal"),
     (float('inf'), "apocalyptic")
 ]
+
+def get_threat_indicator(mod: Mod) -> Optional[TI]:
+    for pattern, ti in threat_table.items():
+        m = re.search(pattern, mod.text, re.IGNORECASE)
+        if m:
+            return ti
+    return None
 
 def get_threat_level(waystone: Item):    
     threat_level_half_mul = 1

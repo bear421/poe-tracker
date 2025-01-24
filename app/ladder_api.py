@@ -1,7 +1,7 @@
 import requests
 from dataclasses import dataclass
 from typing import Optional, List
-
+import json
 # Base API URL
 BASE_API_URL = "https://pathofexile2.com/internal-api/content/game-ladder/id/"
 
@@ -11,10 +11,38 @@ class TwitchStream:
     status: str
     image: str
 
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "status": self.status,
+            "image": self.image
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            name=data["name"],
+            status=data["status"],
+            image=data["image"]
+        )
+
 @dataclass
 class TwitchInfo:
     name: str
     stream: Optional[TwitchStream] = None
+
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "stream": self.stream.to_dict() if self.stream else None
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            name=data["name"],
+            stream=TwitchStream.from_dict(data["stream"]) if data["stream"] else None
+        )
 
 @dataclass
 class Challenges:
@@ -22,11 +50,41 @@ class Challenges:
     completed: int
     max: int
 
+    def to_dict(self):
+        return {
+            "set": self.set,
+            "completed": self.completed,
+            "max": self.max
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            set=data["set"],
+            completed=data["completed"],
+            max=data["max"]
+        )
+
 @dataclass
 class Account:
     name: str
     challenges: Optional[Challenges]
     twitch: Optional[TwitchInfo] = None
+
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "challenges": self.challenges.to_dict() if self.challenges else None,
+            "twitch": self.twitch.to_dict() if self.twitch else None
+        }   
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            name=data["name"],
+            challenges=Challenges.from_dict(data["challenges"]) if data["challenges"] else None,
+            twitch=TwitchInfo.from_dict(data["twitch"]) if data["twitch"] else None
+        )
 
 @dataclass
 class Character:
@@ -36,6 +94,25 @@ class Character:
     class_name: str  # using class_name since 'class' is a reserved word
     experience: int
 
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "level": self.level,
+            "class_name": self.class_name,
+            "experience": self.experience
+        }   
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            id=data["id"],
+            name=data["name"],
+            level=data["level"],
+            class_name=data["class_name"],
+            experience=data["experience"]
+        )
+
 @dataclass
 class LadderEntry:
     rank: int
@@ -43,6 +120,29 @@ class LadderEntry:
     public: Optional[bool]
     character: Character
     account: Account
+
+    def to_dict(self):
+        return {
+            "rank": self.rank,
+            "dead": self.dead,
+            "public": self.public,
+            "character": self.character.to_dict(),
+            "account": self.account.to_dict()
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            rank=data["rank"],
+            dead=data["dead"],
+            public=data["public"],
+            character=Character.from_dict(data["character"]),
+            account=Account.from_dict(data["account"])
+        )
+
+    @classmethod
+    def from_row(cls, data):
+        return cls.from_dict(json.loads(data))
 
 def fetch_ladder_data(league:str="Standard"):
     """

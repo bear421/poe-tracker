@@ -5,3 +5,5 @@ poe_xp_tracker.json
 config.json
 /app/__pycache__
 /user_data
+/app/gui_components/__pycache__
+/app/util/__pycache__

@@ -6,14 +6,7 @@ import pygetwindow as gw
 import psutil
 from typing import Optional
 from PIL import Image
-from instance_tracker import find_poe_window
-
-try:
-    import d3dshot
-    d3d = d3dshot.create(capture_output="pil")
-    SUPPORTS_D3D = True
-except ImportError:
-    SUPPORTS_D3D = False
+from poe_bridge import find_poe_window
 
 try:
     import win32gui
@@ -34,7 +27,7 @@ def get_client_area(window: gw.Window):
 def capture_window(window: gw.Window) -> Optional[Image.Image]:
     try:
         # Get the region for the window
-        if not SUPPORTS_D3D and SUPPORTS_WIN32:
+        if SUPPORTS_WIN32:
             if win32gui.GetForegroundWindow() != window._hWnd:
                 print("[Info] Window is not in foreground, no screenshot taken")
                 return None
@@ -46,13 +39,7 @@ def capture_window(window: gw.Window) -> Optional[Image.Image]:
         else:
             region = (window.left, window.top, window.right, window.bottom)
 
-        # Capture the screenshot
-        if SUPPORTS_D3D:
-            screenshot = d3d.screenshot(region=region)
-        else:
-            screenshot = ImageGrab.grab(bbox=region)
-
-        return screenshot
+        return ImageGrab.grab(bbox=region)
     except Exception as e:
         print(f"[Error] Window capture failed: {e}")
         return None
