@@ -27,7 +27,7 @@ def load_font_templates(font_path, chars, font_size=32, preprocess=True):
     return templates
 
 @lru_cache(maxsize=128)
-def text_template(text, font, color=(255, 255, 255)):
+def text_template(text, font, color=(255, 255, 255), mode="RGB"):
     bbox = font.getbbox(text)
     text_width = bbox[2] - bbox[0]
     # text_height = bbox[3] - bbox[1]
@@ -35,13 +35,15 @@ def text_template(text, font, color=(255, 255, 255)):
     text_height = ascent + descent
     if isinstance(color, tuple) and len(color) == 3:
         # rgb to grayscale
-        color = int(0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2])
-    image = Image.new("L", (text_width, text_height), 0)
+        # color = int(0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2])
+        pass
+    bg_color = (0, 0, 0) if mode == "RGB" else 0
+    image = Image.new(mode, (text_width, text_height), bg_color)
 
     draw = ImageDraw.Draw(image)
     draw.text((0, 0), text, font=font, fill=color)
     template = np.array(image)
-    return template
+    return cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
 
 def _preprocess_image(img):
     """Crop and binarize the text region from the screenshot."""
@@ -83,17 +85,18 @@ def contains_template(image, template, threshold=0.5):
     anchor_points = find_anchor_points(image, template, threshold=threshold)
     return len(anchor_points) > 0
 
-def visualize_anchors(image, template, anchor_points):
+def visualize_anchors(image, template, anchor_points, show=False):
     """Visualize all anchor points on the image."""
     vis_image = image
-    # vis_image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)  # Convert to BGR for visualization
+    vis_image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)  # Convert to BGR for visualization
     h, w = template.shape[:2]
     for x, y in anchor_points:
-        # Draw rectangles around all matched areas
-        cv2.rectangle(vis_image, (x, y), (x + w, y + h), (66, 255, 77), 2)
-    cv2.imshow("All Anchor Points Visualization", vis_image)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+        cv2.rectangle(vis_image, (x, y), (x + w, y + h), (66, 255, 77), 2)  
+    if show:
+        cv2.imshow("All Anchor Points Visualization", vis_image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    return vis_image
 
 def safe_ssim(region, template, default_win_size=7):
     """Safely compute SSIM with dynamic win_size adjustment and matching dimensions."""
