@@ -1,10 +1,9 @@
 import os
+import uuid
 import re
 import time
 import json
 import pytesseract
-import pygetwindow as gw
-from pynput import keyboard
 from pynput import mouse
 import pyautogui
 import pyperclip
@@ -12,7 +11,6 @@ from PIL import ImageOps, Image
 from datetime import datetime
 from datetime import timedelta
 from time import sleep
-import psutil
 import statistics
 from gui import TrackerGUI
 from mouse_lock import block_mouse_movement, unblock_mouse_movement
@@ -23,7 +21,9 @@ from poe_bridge import (
     get_recent_xp_snapshots,
     set_next_waystone,
     in_hideout,
-    in_map
+    in_map,
+    Encounter,
+    add_encounter
 )
 from settings import config
 import threading
@@ -53,25 +53,44 @@ class OCRXPJob:
     def run(self):
         print(f"[Info] was_in_map: {self.was_in_map}, in_map: {in_map()}, then: {self.then}")
         if self.was_in_map:
-            encounter_type = get_encounter_type(self.image)
-            if encounter_type and in_map() and datetime.now() - self.then < timedelta(seconds=30):
-                tts_engine.say(f"encounter: {encounter_type}")
-                threading.Thread(target=tts_engine.runAndWait).start()
+            (encounter_type, encounter_data) = get_encounter_type(self.image)
+            if encounter_type:
+                if in_map() and datetime.now() - self.then < timedelta(seconds=30):
+                    tts_engine.say(f"encounter: {encounter_type}")
+                    threading.Thread(target=tts_engine.runAndWait).start()
+            elif config.get("add_unknown_encounters_as_screenshot"):
+                encounter_type = "screenshot"
         else:
             encounter_type = "hideout"
+            encounter_data = None
         width, height = self.image.size
         crop_height = int(height * 0.15)
         cropped_image = self.image.crop((width * 0.2, height - crop_height, width * 0.9, height))
         xp_value = ocr_xp(cropped_image)
         if xp_value is not None: 
-            apply_xp_snapshot(xp_value, self.then, source="ocr", encounter_type=encounter_type)
+            snapshot = apply_xp_snapshot(xp_value, self.then, source="ocr", encounter_type=encounter_type)
         else:
+            snapshot = None
             print("[Error] No valid XP value found in OCR results.")
             dir = os.path.join(os.getcwd(), "user_data", "debug_xp")
             os.makedirs(dir, exist_ok=True)
             debug_image_path = os.path.join(dir, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
             cropped_image.save(debug_image_path)
             print(f"Debug screenshot saved at: {debug_image_path}")
+        if encounter_type and encounter_type != "hideout":
+            image_path = os.path.join("user_data", "encounters")
+            os.makedirs(image_path, exist_ok=True)
+            image_path = os.path.join(image_path, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+            self.image.save(image_path)
+            encounter = Encounter(
+                str(uuid.uuid4()),
+                encounter_type,
+                self.then,
+                encounter_data,
+                image_path,
+                snapshot
+            )
+            add_encounter(encounter)
 
 @dataclass
 class OCRRitualJob:
@@ -127,6 +146,9 @@ def _capture_xp():
         original_position = mouse_controller.position
 
         game_window = find_poe_window()
+        if not game_window:
+            return
+
         center_x = game_window.left + (game_window.width // 2)
         bottom_y = game_window.bottom - 5  # Move just above the bottom of the window
         mouse_controller.position = (center_x, bottom_y)

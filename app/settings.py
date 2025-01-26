@@ -53,5 +53,10 @@ config = config_manager = ConfigManager(path="user_data/config.json", meta={
         "label": "Imgur client id",
         "type": str,
         "description": "Imgur client ID for uploading screenshots"
+    },
+    "add_unknown_encounters_as_screenshot": {
+        "label": "Add unknown encounters as screenshot",
+        "type": bool,
+        "default": True
     }
 })

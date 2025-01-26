@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import (
-    QApplication, QLabel, QVBoxLayout, QHBoxLayout, QGroupBox, QTableWidget, QTableWidgetItem, QHeaderView, QWidget, QTabWidget)
+    QApplication, QLabel, QVBoxLayout, QHBoxLayout, QGroupBox, QTableWidget, QTableWidgetItem, QHeaderView, QWidget, QTabWidget, QSizePolicy
+)
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QFont
 from datetime import datetime, timedelta
@@ -10,6 +11,7 @@ from ladder_api import LadderEntry
 from db import conn
 from xp_table import get_level_from_xp, get_xp_range_for_level
 from area_tla import get_threat_indicator
+from util.format import format_number
 
 class OverviewWidget(QWidget):
 
@@ -28,10 +30,11 @@ class OverviewWidget(QWidget):
         
         self.mods_layout = QVBoxLayout()
 
-        map_layout.addWidget(self.xp_label)
-        map_layout.addWidget(self.xph_label)
-        map_layout.addWidget(self.duration_label)
-        map_layout.addLayout(self.mods_layout)
+        map_layout.addWidget(self.xp_label, 0)
+        map_layout.addWidget(self.xph_label, 0)
+        map_layout.addWidget(self.duration_label, 0)
+        map_layout.addLayout(self.mods_layout, 0)
+        map_layout.addStretch()
         self.map_group.setLayout(map_layout)
 
         self.encounters_group = QGroupBox("Encounters")
@@ -50,6 +53,7 @@ class OverviewWidget(QWidget):
         top_section.layout().addWidget(self.ladder_group)
         self.layout.addWidget(top_section)
         self.layout.addWidget(self.encounters_group)
+        self.layout.addStretch()
         self.setLayout(self.layout)
 
         self.current_ladder_entry = None
@@ -62,6 +66,24 @@ class OverviewWidget(QWidget):
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self.update)
         self.update_timer.start(500)
+
+    def clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+            else:
+                del item
+
+    def _recent_xph(self, maps):
+        sorted_maps = sorted(maps, key=lambda m: m.xph)
+        trim_count = len(sorted_maps) // 10  # Top and bottom 10%
+        trimmed_maps = sorted_maps[trim_count: -trim_count]
+        # use float to avoid overflow
+        total_weight = sum(float(m.span.map_time().total_seconds()) for m in trimmed_maps)
+        weighted_avg = sum(float(m.xph) * float(m.span.map_time().total_seconds()) for m in trimmed_maps)
+        return weighted_avg / total_weight
 
     def update(self):
         try:
@@ -77,15 +99,12 @@ class OverviewWidget(QWidget):
                 ) if current_map.span.end is None else current_map.span.map_time()
                 xph = int(xp_gained / total_duration.total_seconds() * 3600) if total_duration.total_seconds() > 0 else 0
                 total_duration = timedelta(seconds=int(total_duration.total_seconds()))
-                self.xp_label.setText(f"XP Gained: {xp_gained:,}")
-                self.xph_label.setText(f"XP/H: {xph:,}")
+                if current_map.in_hideout():
+                    self.xp_label.setText(f"XP Gained: {format_number(xp_gained)}")
+                    self.xph_label.setText(f"XP/H: {format_number(xph)}")
                 self.duration_label.setText(f"Duration: {str(total_duration)}")
 
-                while self.mods_layout.count():
-                    widget = self.mods_layout.takeAt(0).widget()
-                    if widget:
-                        widget.deleteLater()
-
+                self.clear_layout(self.mods_layout)
                 if current_map.waystone:
                     for mod in current_map.waystone.affixes:
                         ti = get_threat_indicator(mod)
@@ -130,33 +149,29 @@ class OverviewWidget(QWidget):
                 encounters.reverse()
 
             if encounters:
-                for i in range(self.encounters_layout.count()):
-                    widget = self.encounters_layout.itemAt(i).widget()
-                    if widget:
-                        widget.deleteLater()
-
+                self.clear_layout(self.encounters_layout)
                 table = QTableWidget(len(encounters), 5)
                 table.setHorizontalHeaderLabels(["#", "Encounter Type", "XP", "XP/H", "Duration"])
                 table.horizontalHeader().setStretchLastSection(True)
                 table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
                 table.verticalHeader().setVisible(False)
-                table.setEditTriggers(QTableWidget.NoEditTriggers)  # Make the table read-only
+                table.setEditTriggers(QTableWidget.NoEditTriggers)  #read-only
 
                 for i, row in enumerate(encounters):
                     table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
                     table.setItem(i, 1, QTableWidgetItem(row["Encounter Type"]))
-                    table.setItem(i, 2, QTableWidgetItem(f"{row['XP']:,}"))
-                    table.setItem(i, 3, QTableWidgetItem(f"{row['XP/H']:,}"))
+                    table.setItem(i, 2, QTableWidgetItem(f"{format_number(row['XP'])}"))
+                    table.setItem(i, 3, QTableWidgetItem(f"{format_number(row['XP/H'])}"))
                     table.setItem(i, 4, QTableWidgetItem(row["Duration"]))
 
                 # Add the table to the layout
                 self.encounters_layout.addWidget(table)
+                self.encounters_group.show()
+            else:
+                self.encounters_group.hide()
 
             if self.current_ladder_entry:
-                for i in range(self.ladder_layout.count()):
-                    widget = self.ladder_layout.itemAt(i).widget()
-                    if widget:
-                        widget.deleteLater()
+                self.clear_layout(self.ladder_layout)
                 ladder_entry = self.current_ladder_entry
                 character_name = ladder_entry.character.name
                 rank = ladder_entry.rank
@@ -170,20 +185,21 @@ class OverviewWidget(QWidget):
                     xp_delta = xp - xp_lo
                     xpp = xp_delta / (xp_hi - xp_lo) * 100
                     valid_maps = list(filter(lambda m: m.xph, get_recent_maps()))
-                    median_xph = statistics.median(map(lambda m: m.xph, valid_maps))
+                    recent_xph = self._recent_xph(valid_maps)
                     idle_p_list = []
                     for m in valid_maps:
                         idle_p_list.append(m.span.idle_time() / (m.span.map_time() + m.span.idle_time()))
                     idle_p = statistics.median(idle_p_list)
-                    if median_xph > 0:
-                        eta = f"{(xp_hi - xp) / median_xph / (1 - idle_p):.1f}h"
+                    if recent_xph > 0:
+                        eta = f"{(xp_hi - xp) / recent_xph / (1 - idle_p):.1f}h"
 
                 self.ladder_layout.addWidget(QLabel(f"Character: {character_name}"))
                 self.ladder_layout.addWidget(QLabel(f"Rank: {rank}"))
                 self.ladder_layout.addWidget(QLabel(f"XP: {xpp:.3f}%"))
-                self.ladder_layout.addWidget(QLabel(f"Median XP/H: {int(median_xph):,}"))
+                self.ladder_layout.addWidget(QLabel(f"Recent XP/H: {format_number(recent_xph)}"))
                 self.ladder_layout.addWidget(QLabel(f"Idle: {int(idle_p * 100)}%"))
                 self.ladder_layout.addWidget(QLabel(f"ETA: {eta}"))
+                self.ladder_layout.addStretch()
 
         except Exception as e:
             print(f"[Error in update_overview]: {str(e)}\n{traceback.format_exc()}")

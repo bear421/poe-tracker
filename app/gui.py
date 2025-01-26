@@ -20,6 +20,9 @@ from gui_components.maps import MapsWidget
 from gui_components.stats import StatsWindow
 from gui_components.debug import DebugFrame
 from gui_components.config import ConfigFrame
+from gui_components.encounters import EncountersWidget
+import traceback
+from PySide6.QtCore import qInstallMessageHandler, QtMsgType
 
 class TrackerGUI:
 
@@ -42,6 +45,7 @@ class TrackerGUI:
         tabs.addTab(OverviewWidget(), "Overview")
         tabs.addTab(MapsWidget(), "Maps")
         tabs.addTab(StatsWindow(), "Stats")
+        tabs.addTab(EncountersWidget(), "Encounters")
         layout.addWidget(tabs)
         widget = QWidget()
         widget.setLayout(layout)
@@ -52,6 +56,7 @@ class TrackerGUI:
 
         listener = keyboard.Listener(on_press=self.on_press)
         listener.start()
+
         sys.exit(app.exec())
 
     def on_press(self, key):

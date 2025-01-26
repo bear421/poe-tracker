@@ -3,12 +3,37 @@ import pytesseract
 import numpy as np
 from PIL import Image
 import imagehash
+import simple_ocr
 from PIL.Image import Image as PILImage
-
+from typing import Optional, Dict
+from functools import partial
+import time
+from dataclasses import dataclass
 EXPEDITION_RED_TEMPLATE = "assets/templates/expedition_red.png"
 EXPEDITION_GREY_TEMPLATE = "assets/templates/expedition_grey.png"
+COLOR_NORMAL = (75, 75, 75)
+COLOR_MAGIC = (46, 57, 96)
+COLOR_RARE = (96, 85, 32)
 
-def is_breach(image):
+@dataclass
+class EncounterCtx:
+    image: np.ndarray
+    image_gs: Optional[np.ndarray] = None
+    image_hsv: Optional[np.ndarray] = None
+    debug: bool = False
+
+    def get_image_gs(self):
+        if self.image_gs is None:
+            self.image_gs = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
+        return self.image_gs
+
+    def get_image_hsv(self):
+        if self.image_hsv is None:
+            self.image_hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
+        return self.image_hsv
+
+
+def is_breach(ctx: EncounterCtx) -> Optional[Dict]:
     """Detect if a breach encounter is present in the image."""
     debug_info = {
         "steps": []
@@ -17,7 +42,7 @@ def is_breach(image):
     debug_info["steps"].append("Image loaded successfully")
 
     # Convert to HSV for color filtering
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hsv = ctx.get_image_hsv()
     debug_info["steps"].append("Converted image to HSV")
 
     # Define color ranges for purple (main hand)
@@ -55,42 +80,86 @@ def is_breach(image):
                     debug_info["steps"].append("Detection criteria met")
                     break
 
-    return detected
+    return ("Breach", {}) if detected else (None, None)
 
-def is_ritual(image):
-    """Detect the reddish box that outlines the ritual rewards panel."""
+def is_ritual(ctx: EncounterCtx) -> Optional[Dict]:
+    image = ctx.get_image_gs()
+    contains_exactly = partial(_contains_exactly, image = image, threshold=0.5, scale=0.1, font_size=25, font_color=(98, 98, 89))
+    altar_types = ["Smothered", "Infested", "Tainted", "Contaminated", "Sapping"]
+    if not contains_exactly("Ritual"):
+        return (None, None)
 
-    # Convert to HSV for color filtering
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    maybe_completed = contains_exactly("Ritual Rewards")
+    maybe_not_completed = contains_exactly("Ritual Altar")
+    # check for symmetry to avoid false positive in fast check
+    if maybe_completed != maybe_not_completed:
+        completed = maybe_completed
+    else:
+        completed = contains_exactly("Ritual Rewards", threshold=0.55, scale=0.5)
+    suffix = "Rewards" if completed else "Altar"
+    for altar_type in altar_types:
+        text = f"{altar_type} Ritual {suffix}"
+        if not contains_exactly(text):
+            continue
+        if contains_exactly(text, threshold=0.65, scale=0.5):
+            return ("Ritual", {"altar_type": altar_type, "completed": completed})
+    return (None, None)
 
-    # Define reddish color range
-    reddish_lower = np.array([0, 50, 50])  # Adjust hue/saturation/value as needed
-    reddish_upper = np.array([10, 255, 255])
+def is_strongbox(ctx: EncounterCtx) -> Optional[Dict]:
+    image = ctx.get_image_gs()
+    contains_exactly = partial(_contains_exactly, image = image, threshold=0.5, scale=0.1, font_size=25, font_color=COLOR_RARE)
+    strongbox_types = ["Ornate", "Researcher's", "Armourer's", "Blacksmith's", ""] # "" = normal Strongbox
+    if not contains_exactly("Strongbox"):
+        return (None, None)
+    for strongbox_type in strongbox_types:
+        text = f"{strongbox_type} Strongbox"
+        if not contains_exactly(text):
+            continue
+        for color in [COLOR_NORMAL, COLOR_MAGIC, COLOR_RARE]:
+            if contains_exactly(text, threshold=0.7, scale=0.5, font_color=color): 
+                rarity = "Normal" if color == COLOR_NORMAL else "Magic" if color == COLOR_MAGIC else "Rare"
+                return ("Strongbox", {"strongbox_type": strongbox_type, "rarity": rarity})
+    return (None, None)
 
-    # Create mask for reddish color
-    reddish_mask = cv2.inRange(hsv, reddish_lower, reddish_upper)
+def is_essence(ctx: EncounterCtx) -> Optional[Dict]:
+    image = ctx.get_image_gs()
+    essence_types = ["the Body", "the Mind", "Enhancement", "Torment", "Flames", "Ice", "Electricity", "Ruin", "Battle", "Sorcery", "Haste", "the Infinite"]
+    contains_exactly = partial(_contains_exactly, image = image, threshold=0.5, scale=0.1, font_size=25, font_color=COLOR_RARE)
+    n_essences = 0
+    # todo check all anchors for multiple essences
+    if not contains_exactly("Essence of"):
+        return (None, None)
+    maybe_greater = contains_exactly("Greater Essence of")
+    greater = maybe_greater and contains_exactly("Greater Essence of", threshold=0.7, scale=0.5)
+    for essence_type in essence_types:
+        text = f"Essence of {essence_type}"
+        if not contains_exactly(text):
+            continue
+        if contains_exactly(text, threshold=0.65, scale=0.5): 
+            return ("Essence", {"essence_types": [text], "greater": greater})
+    return (None, None)
 
-    # Find contours
-    contours, _ = cv2.findContours(reddish_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+def _contains_exactly(text, image, threshold=0.5, scale=1.0, font_size=25, font_color=COLOR_NORMAL, debug=False):
+    if scale > 1.0:
+        raise ValueError("scale must be lte 1.0")
+    font = simple_ocr.load_font(font_size * scale)
+    template = simple_ocr.text_template(text, font=font, color=font_color)
+    if scale < 1.0:
+        tiny_image = simple_ocr.resize_image(image, scale)
+        tiny_template = template
+    else:
+        tiny_image = image
+        tiny_template = template
+    if debug:
+        anchors = simple_ocr.find_anchor_points(tiny_image, tiny_template, threshold=threshold)
+        simple_ocr.visualize_anchors(tiny_image, tiny_template, anchors)
+    return simple_ocr.contains_template(tiny_image, tiny_template, threshold=threshold)
 
-    # Iterate over contours to detect box-like shapes
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        if area > 500:  # Adjust area threshold for different resolutions
-            x, y, w, h = cv2.boundingRect(contour)
-            aspect_ratio = w / h
-
-            # Check if the contour has a box-like aspect ratio
-            if 0.8 < aspect_ratio < 1.2:
-                return True
-
-    return False
-
-def is_boss(image):
+def is_boss(ctx: EncounterCtx):
     """Detect if a boss encounter is present by looking for the big red health bar at the top."""
 
     # Convert to HSV for color filtering
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hsv = ctx.get_image_hsv()
 
     # Define red color range for the health bar
     red_lower1 = np.array([0, 50, 50])
@@ -123,7 +192,7 @@ def is_boss(image):
 
     return False
 
-def is_expedition(image):
+def is_expedition(ctx: EncounterCtx) -> Optional[Dict]:
     """Detect if an Expedition encounter is present using feature-based matching with SIFT."""
 
     # Load the templates
@@ -134,7 +203,7 @@ def is_expedition(image):
         raise FileNotFoundError("Could not load one or both Expedition templates")
 
     # Convert the target image to grayscale
-    image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    image_gray = ctx.get_image_gs()
 
     # Initialize SIFT detector
     sift = cv2.SIFT_create()
@@ -160,9 +229,9 @@ def is_expedition(image):
 
     # Check if sufficient matches are found for either template
     if len(matches_red) > match_threshold:
-        return True
+        return {"name": "Expedition", "is_armed": True}
 
-    return False
+    return (None, None)
 
 def image_to_opencv(image):
     """
@@ -189,17 +258,30 @@ def image_to_opencv(image):
 
 def get_encounter_type(image):
     opencv_image = image_to_opencv(image)
-    """Determine the type of encounter in the image: Breach, Ritual, Boss, Expedition, or None."""
-    if is_breach(opencv_image):
-        return "Breach"
-    elif is_boss(opencv_image):
-        return "Boss"
-    elif is_expedition(opencv_image):
-        return "Expedition"
-    elif is_ritual(opencv_image):
-        return "Ritual"
-    else:
-        return None
+    ctx = EncounterCtx(image=opencv_image)
+    for algo in [is_breach, is_ritual, is_strongbox, is_expedition, is_essence]:
+        start = time.time()
+        (name, data) = algo(ctx)
+        end = time.time()
+        if name:
+            print(f"Encounter detected: {name} in {end - start} seconds data: {data}")
+            return (name, data)
+    return (None, None)
+
+def debug_encounters(image):
+    opencv_image = image_to_opencv(image)
+    ctx = EncounterCtx(image=opencv_image, debug=True)
+    encounters = []
+    for algo in [is_ritual, is_strongbox, is_expedition, is_essence, is_breach]:
+        start = time.time()
+        (name, data) = algo(ctx)
+        end = time.time()
+        if not name:
+            name = algo.__name__.replace("is_", "").title()
+            data = {}
+        data["_took"] = end - start
+        encounters.append((name, data))
+    return encounters
 
 # Example usage
 if __name__ == "__main__":

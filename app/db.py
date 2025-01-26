@@ -7,3 +7,4 @@ conn.execute("""CREATE TABLE IF NOT EXISTS xp_snapshots (id string, data JSON)""
 conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_instance_manager_state_field ON instance_manager_state (field)""")
 conn.execute("""CREATE TABLE IF NOT EXISTS gui_state (field string, data JSON)""")
 conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_gui_state_field ON instance_manager_state (field)""")
+conn.execute("""CREATE TABLE IF NOT EXISTS encounters (id string, data JSON)""")

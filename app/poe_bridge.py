@@ -12,6 +12,8 @@ import psutil
 from db import conn
 from ladder_api import fetch_data
 from instance_tracker import InstanceTracker, MapInstance, XPSnapshot
+from collections import deque
+from dataclasses import dataclass
 
 USER_DATA_PATH = "user_data"
 LOG_FILE_PATH = os.path.join(USER_DATA_PATH, "poe_xp_tracker.json")
@@ -20,7 +22,41 @@ os.makedirs(USER_DATA_PATH, exist_ok=True)
 _cached_window = None
 _last_ladder_capture = None
 _tracker = InstanceTracker()
+_recent_encounters = deque(maxlen=100)
 events = _tracker.events
+
+@dataclass
+class Encounter:
+    id: str
+    name: str
+    ts: datetime
+    data: {}
+    screenshot_path: Optional[str]
+    snapshot: Optional[XPSnapshot]
+
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "ts": self.ts.isoformat(),
+            "data": self.data,
+            "screenshot_path": self.screenshot_path,
+            "snapshot": self.snapshot.to_dict() if self.snapshot else None
+        }
+
+    @classmethod
+    def from_dict(cls, id, data):
+        return cls(
+            id=id,
+            name=data["name"],
+            ts=datetime.fromisoformat(data["ts"]),
+            data=data["data"],
+            screenshot_path=data["screenshot_path"],
+            snapshot=None #XPSnapshot.from_dict(data["snapshot"]) if data["snapshot"] else None
+        )
+    
+    @classmethod
+    def from_row(cls, id, data):
+        return cls.from_dict(id, json.loads(data))
 
 def find_poe_pid():
     procs = psutil.process_iter(['pid', 'name'])
@@ -60,7 +96,6 @@ def find_poe_window() -> Optional[gw.Window]:
     if SUPPORTS_WIN32:
         pid = find_poe_pid()
         if not pid:
-            print("[Warn] Path of Exile 2 process not found.")
             return None
 
         def callback(hwnd, target_pid):
@@ -83,7 +118,6 @@ def find_poe_window() -> Optional[gw.Window]:
                 _cached_window = window
                 return window
 
-    print("[Error] Path of Exile 2 window not found.")
     return None
 
 def find_poe_logfile():
@@ -118,6 +152,9 @@ def get_recent_maps():
 def get_recent_xp_snapshots():
     return _tracker.recent_xp_snapshots
 
+def get_recent_encounters():
+    return _recent_encounters
+
 def get_current_map():
     return _tracker.get_current_map()
 
@@ -139,12 +176,24 @@ def parse_all_maps_from_log(log_file=None):
                 yield m
             completed_maps.clear()
 
+def delete_map(map: MapInstance):
+    conn.execute("DELETE FROM maps WHERE id = ?", [map.id])
+    _tracker.recent_maps.remove(map)
+
+def update_map(map: MapInstance):
+    pass
+
 def set_next_waystone(item: Item):
     if not isinstance(item, Item):
         raise TypeError("item must be an Item object")
 
     _tracker.set_next_waystone(item)
     _update_state(item.id, "next_waystone", item)
+
+def add_encounter(encounter: Encounter):    
+    conn.execute("INSERT INTO encounters VALUES (?, ?)", [encounter.id, encounter.to_dict()])
+    _recent_encounters.append(encounter)
+    events.emit("encounter_detected", {"encounter": encounter})
 
 def init():
     _load_state()
@@ -156,13 +205,18 @@ def init():
     events.on("map_entered", lambda _: threading.Thread(target=_capture_ladder_data).start())
 
 def _load_state():
-    _tracker.recent_maps.extend(
+    # recent maps and xp-snapshots are ordered oldest to newest, but we want the 100 most recent ones, therefore, we extendLeft
+    _tracker.recent_maps.extendleft(
         MapInstance.from_row(row[0], row[1])
         for row in conn.execute("SELECT id, data FROM maps ORDER BY data->'span'->'start' DESC LIMIT 100").fetchall()
     )
-    _tracker.recent_xp_snapshots.extend(
+    _tracker.recent_xp_snapshots.extendleft(
         XPSnapshot.from_row(row[0], row[1])
         for row in conn.execute("SELECT id, data FROM xp_snapshots ORDER BY data->'ts' DESC LIMIT 100").fetchall()
+    )
+    _recent_encounters.extendleft(
+        Encounter.from_row(row[0], row[1])
+        for row in conn.execute("SELECT id, data FROM encounters ORDER BY data->'ts' DESC LIMIT 100").fetchall()
     )
     for (id, field, data) in conn.execute("SELECT id, field, data FROM instance_manager_state").fetchall():
         if field == "current_map":
