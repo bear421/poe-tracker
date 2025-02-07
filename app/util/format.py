@@ -1,5 +1,8 @@
 
 def format_number(num):
+    if isinstance(num, str):
+        num = int(num)
+    
     suffixes = [(1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")]
     for divisor, suffix in suffixes:
         if abs(num) >= divisor:

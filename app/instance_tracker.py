@@ -199,6 +199,7 @@ class MapInstance:
     def in_hideout(self):
         return self.hideout_start_time is not None
 
+    @property
     def map_label(self):
         map_name = re.sub(r'^Map', '', self.map_name)
         words = re.findall(r'[A-Z][a-z]*|[a-z]+', map_name)
@@ -218,12 +219,18 @@ class MapInstance:
             self.span.add_to_hideout_time(hideout_duration)
         self.hideout_start_time = None
         self.hideout_exit_time = ts
-        
+    
+    def is_unlockable_hideout(self):
+        return self.map_name.lower().endswith("_claimable")
+
+    def is_tower(self):
+        return self.map_name.lower() in ["maplosttowers", "mapmesa", "mapalpineridge", "mapbluff", "mapswamptower"]
+
     def to_dict(self):
         return {
             "span": self.span.to_dict(),
             "map_name": self.map_name,
-            "map_label": self.map_label(),
+            "map_label": self.map_label,
             "area_level": self.area_level,
             "seed": self.seed,
             "xp_start": self.xp_start,
@@ -289,30 +296,29 @@ class InstanceTracker:
         """
         for line in lines:
             map_match = MAP_ENTRY_REGEX.search(line)
-            if not map_match:
-                if self._current_map:
-                    ts_match = TS_REGEX.search(line)
-                    if ts_match:
-                        self.inform_interaction(datetime.strptime(ts_match.group(1), "%Y/%m/%d %H:%M:%S"))
-                continue
-            else:
-                post_load_match = POST_LOAD_REGEX.search(line)
-                if post_load_match:
-                    post_load_ts = datetime.strptime(map_match.group(1), "%Y/%m/%d %H:%M:%S")
-                    if self._current_map:
-                        entered_at = self._current_map.span.area_entered_at
-                        load_delta = post_load_ts - entered_at
-                        if (load_delta >= 0):
-                            self._current_map.span.add_to_load_time(load_delta)
-                        else:
-                            print(f"[Warning] load_delta is negative: {load_delta}")
-                    self.events.emit("area_post_load", {"load_delta": load_delta})
-
-            area_entered_ts = datetime.strptime(map_match.group(1), "%Y/%m/%d %H:%M:%S")
-            area_level = int(map_match.group(2))
-            map_name = map_match.group(3)
-            map_seed = int(map_match.group(4)) if map_match.group(3) else None
-            self.enter_area(AreaInfo(area_entered_ts, area_level, map_name, map_seed))
+            if map_match:
+                area_entered_ts = datetime.strptime(map_match.group(1), "%Y/%m/%d %H:%M:%S")
+                area_level = int(map_match.group(2))
+                map_name = map_match.group(3)
+                map_seed = int(map_match.group(4)) if map_match.group(3) else None
+                self.enter_area(AreaInfo(area_entered_ts, area_level, map_name, map_seed))
+            elif self._current_map:
+                    post_load_match = POST_LOAD_REGEX.search(line)
+                    if post_load_match:
+                        post_load_ts = datetime.strptime(post_load_match.group(1), "%Y/%m/%d %H:%M:%S")
+                        if self._current_map and self._current_map.span.area_entered_at:
+                            entered_at = self._current_map.span.area_entered_at
+                            load_delta = post_load_ts - entered_at
+                            print(f"[Info] load_delta: {load_delta}")
+                            if load_delta.total_seconds() >= 0:
+                                self._current_map.span.add_to_load_time(load_delta)
+                                self.events.emit("area_post_load", {"load_delta": load_delta})
+                            else:
+                                print(f"[Warning] load_delta is negative: {load_delta}")
+                    elif self._current_map.span.load_time:
+                        ts_match = TS_REGEX.search(line)
+                        if ts_match:
+                            self.inform_interaction(datetime.strptime(ts_match.group(1), "%Y/%m/%d %H:%M:%S"))
 
     def enter_area(self, area_info: AreaInfo):
         if not isinstance(area_info, AreaInfo):
@@ -387,6 +393,9 @@ class InstanceTracker:
             raise TypeError("item must be an Item object")
 
         self._next_waystone = item
+
+    def get_next_waystone(self):
+        return self._next_waystone
 
     def inform_interaction(self, ts: datetime):
         if self.in_map():

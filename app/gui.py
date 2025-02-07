@@ -18,11 +18,14 @@ import threading
 from gui_components.overview import OverviewWidget
 from gui_components.maps import MapsWidget
 from gui_components.stats import StatsWindow
-from gui_components.debug import DebugFrame
+from gui_components.debug import DebugWidget
 from gui_components.config import ConfigFrame
 from gui_components.encounters import EncountersWidget
+from gui_components.debug import DebugWidget
 import traceback
 from PySide6.QtCore import qInstallMessageHandler, QtMsgType
+
+
 
 class TrackerGUI:
 
@@ -40,12 +43,15 @@ class TrackerGUI:
         window = QMainWindow()
         window.setWindowTitle("PoE Tracker")
         window.setGeometry(100, 100, 1000, 600)
+        window.setWindowFlags(window.windowFlags() | Qt.WindowStaysOnTopHint)
+        
         layout = QVBoxLayout()
         tabs = QTabWidget()
         tabs.addTab(OverviewWidget(), "Overview")
         tabs.addTab(MapsWidget(), "Maps")
         tabs.addTab(StatsWindow(), "Stats")
         tabs.addTab(EncountersWidget(), "Encounters")
+        tabs.addTab(DebugWidget(), "Debug")
         layout.addWidget(tabs)
         widget = QWidget()
         widget.setLayout(layout)

@@ -42,10 +42,8 @@ class EncounterPreviewDialog(QDialog):
         close_button = QPushButton("Close")
         close_button.clicked.connect(self.close)
         main_layout.addWidget(close_button)
-
-        encounters = debug_encounters(encounter.screenshot_path)
-        encounters = [e for e in encounters if e[0]]
-        self.populate_debug_tab(encounters)
+        self.encounter = encounter
+        self.update_debug_tab()
 
         self.pixmap = QPixmap(encounter.screenshot_path)
         self.update_image()
@@ -59,8 +57,10 @@ class EncounterPreviewDialog(QDialog):
             )
             self.image_label.setPixmap(scaled_pixmap)
 
-    def populate_debug_tab(self, encounters):
-        for name, data in encounters:
+    def update_debug_tab(self):
+        encounters = debug_encounters(self.encounter.screenshot_path)
+        # encounters = [e for e in encounters if e[0]]
+        for name, info in encounters:
             encounter_tab = QWidget()
             scroll_area = QScrollArea()
             scroll_area.setWidgetResizable(True)
@@ -70,12 +70,12 @@ class EncounterPreviewDialog(QDialog):
             title_label = QLabel(f"<b>{name}</b>")
             scroll_layout.addWidget(title_label)
 
-            if "_debug_info" in data:
-                for debug_entry in data["_debug_info"]:
+            if "_debug_info" in info:
+                for debug_entry in info["_debug_info"]:
                     for key, value in debug_entry.items():
                         if key in ["image", "anchors"]:
                             continue
-                        if key in ["visualization", "template"]:
+                        if key in ["visualization", "template", "cropped_image"]:
                             qimage = self._convert_np_to_qpixmap(value)
                             if qimage:
                                 image_label = QLabel()
@@ -85,10 +85,20 @@ class EncounterPreviewDialog(QDialog):
                             text_label = QLabel(f"{key}: {value}")
                             scroll_layout.addWidget(text_label)
 
+            if "data" in info and info["data"] is not None:
+                for key, value in info["data"].items():
+                    text_label = QLabel(f"{key}: {value}")
+                    scroll_layout.addWidget(text_label)
+
             scroll_area.setWidget(scroll_content)
             encounter_tab_layout = QVBoxLayout(encounter_tab)
             encounter_tab_layout.addWidget(scroll_area)
-            self.debug_tabs.addTab(encounter_tab, name)
+            prefix = "🟢" if info["match"] else "🔴"
+            ms = info['_took'] * 1000
+
+            suffix = f"{ms:.0f}ms" if ms > 10 else f"{ms:.1f}ms"
+            self.debug_tabs.addTab(encounter_tab, f"{prefix} {name} {suffix}")
+
 
     def _convert_np_to_qpixmap(self, np_image):
         if np_image is not None and isinstance(np_image, np.ndarray):
@@ -97,6 +107,7 @@ class EncounterPreviewDialog(QDialog):
                 raise Exception(f"deny generation of massive pixmap: {width}x{height}")
             bytes_per_line = 3 * width if np_image.ndim == 3 else width
             qimage_format = QImage.Format_RGB888 if np_image.ndim == 3 else QImage.Format_Grayscale8
+            np_image = np.ascontiguousarray(np_image)
             qimage = QImage(np_image.data, width, height, bytes_per_line, qimage_format)
             return QPixmap.fromImage(qimage)
         return None
@@ -160,7 +171,7 @@ class EncountersWidget(QWidget):
 
     def update_table(self):
         self.table.setRowCount(0)
-        for encounter in get_recent_encounters():
+        for encounter in reversed(get_recent_encounters()):
             row_position = self.table.rowCount()
             self.table.insertRow(row_position)
 
@@ -168,9 +179,9 @@ class EncountersWidget(QWidget):
             self.table.setItem(row_position, 1, QTableWidgetItem(encounter.ts.strftime("%Y-%m-%d %H:%M:%S")))
             self.table.setItem(row_position, 2, QTableWidgetItem(str(encounter.data)))
 
-            if encounter.screenshot_path:
+            if encounter.q_thumbnail:
                 thumbnail_label = QLabel()
-                pixmap = QPixmap(encounter.screenshot_path)
+                pixmap = QPixmap(encounter.q_thumbnail)
                 pixmap = pixmap.scaledToHeight(100, Qt.SmoothTransformation)
                 thumbnail_label.setPixmap(pixmap)
                 thumbnail_label.setAlignment(Qt.AlignCenter)

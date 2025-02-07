@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, QMetaObject, Signal
 from datetime import timedelta
 from poe_bridge import get_recent_maps, events, delete_map
+from util.format import format_number
 
 class MapsWidget(QWidget):
     _map_completed_signal = Signal()
@@ -37,16 +38,16 @@ class MapsWidget(QWidget):
 
     def update_table(self):
         self.map_table.setRowCount(0)
-        for map_data in get_recent_maps():
+        for map_data in reversed(get_recent_maps()):
             duration_seconds = map_data.span.map_time().total_seconds()
             duration_str = str(timedelta(seconds=int(duration_seconds)))
 
             row_position = self.map_table.rowCount()
             self.map_table.insertRow(row_position)
 
-            self.map_table.setItem(row_position, 0, QTableWidgetItem(map_data.map_name))
-            self.map_table.setItem(row_position, 1, QTableWidgetItem(f"{map_data.xp_gained:,}"))
-            self.map_table.setItem(row_position, 2, QTableWidgetItem(f"{int(map_data.xph):,}"))
+            self.map_table.setItem(row_position, 0, QTableWidgetItem(map_data.map_label))
+            self.map_table.setItem(row_position, 1, QTableWidgetItem(format_number(map_data.xp_gained)))
+            self.map_table.setItem(row_position, 2, QTableWidgetItem(format_number(int(map_data.xph))))
             self.map_table.setItem(row_position, 3, QTableWidgetItem(str(map_data.area_level)))
             self.map_table.setItem(row_position, 4, QTableWidgetItem(duration_str))
             delete_button = QToolButton()

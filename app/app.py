@@ -23,8 +23,13 @@ from poe_bridge import (
     in_hideout,
     in_map,
     Encounter,
-    add_encounter
+    add_encounter,
+    get_recent_xph,
+    events,
+    get_recent_encounters,
+    get_current_map
 )
+from instance_tracker import MapInstance
 from settings import config
 import threading
 import queue
@@ -40,7 +45,6 @@ from Levenshtein import distance as Levenshtein
 # Configure Tesseract path (adjust if necessary)
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-MAP_ENTRY_REGEX = re.compile(r"Generating level (\d+) area \"(.+?)\"(?:.*seed (\d+))?", re.IGNORECASE)
 tts_engine = None
 ocr_queue = queue.Queue()
 
@@ -51,7 +55,6 @@ class OCRXPJob:
     then: datetime
 
     def run(self):
-        print(f"[Info] was_in_map: {self.was_in_map}, in_map: {in_map()}, then: {self.then}")
         if self.was_in_map:
             (encounter_type, encounter_data) = get_encounter_type(self.image)
             if encounter_type:
@@ -62,7 +65,6 @@ class OCRXPJob:
                 encounter_type = "screenshot"
         else:
             encounter_type = "hideout"
-            encounter_data = None
         width, height = self.image.size
         crop_height = int(height * 0.15)
         cropped_image = self.image.crop((width * 0.2, height - crop_height, width * 0.9, height))
@@ -93,16 +95,29 @@ class OCRXPJob:
             add_encounter(encounter)
 
 @dataclass
+class RitualCapture:
+    item: Item
+    screenshot_path: str
+    altar_type: Optional[str]
+    area_level: Optional[int]
+
+@dataclass
 class OCRRitualJob:
     image: Image.Image
     item: Item
     then: datetime
+    encounter: Optional[Encounter]
+    map: Optional[MapInstance]
 
     def run(self):
         ocr_text = "todo"
         tribute_cost = parse_tribute_cost(ocr_text)
         if tribute_cost:
             print(f"tribute cost: {tribute_cost}")
+            screenshot_path = "todo"
+            altar_type = self.encounter.get("altar_type") if self.encounter else None
+            area_level = self.map.area_level if self.map else None
+            RitualCapture(self.item, screenshot_path, altar_type, area_level)
 
 def capture_data():
     if config.get("capture_item_data"):
@@ -131,7 +146,15 @@ def _capture_item():
                         threading.Thread(target=tts_engine.runAndWait).start()
                 else:
                     screenshot = capture_window(find_poe_window())
-                    ocr_queue.put(OCRRitualJob(screenshot, item, datetime.now()))
+                    ritual_encounter = None
+                    start_ts = get_current_map().span.start
+                    for encounter in reversed(get_recent_encounters()):
+                        if encounter.ts < start_ts:
+                            break
+                        if encounter.type == "ritual":
+                            ritual_encounter = encounter
+                            break
+                    ocr_queue.put(OCRRitualJob(screenshot, item, datetime.now(), ritual_encounter, get_current_map()))
                     # cannot capture xp with ritual window open (?)
                     return
                 if not lock_input:
@@ -193,13 +216,11 @@ def ocr_xp(image, previous_xp = None):
         previous_xp = get_recent_xp_snapshots()[-1].xp if get_recent_xp_snapshots() else None
     ocr_methods = [
         ("grayscale", lambda img: img.convert("L")),
-        ("color", lambda img: img),
-        ("inverted", lambda img: ImageOps.invert(img.convert("L"))),
         ("binary", lambda img: ImageOps.invert(img.convert("L")).point(lambda p: p > 128 and 255)),
+        ("color", lambda img: img),
+        ("inverted", lambda img: ImageOps.invert(img.convert("L")))
     ]
     xp_values = []
-
-    # Try OCR methods sequentially
     for method_name, preprocess in ocr_methods:
         processed_image = preprocess(image)
         xp_text = pytesseract.image_to_string(processed_image, config="--psm 6 --oem 3")
@@ -211,8 +232,8 @@ def ocr_xp(image, previous_xp = None):
         # Stop early if a valid XP value is within 50% of prior XP
         if previous_xp is not None and xp_value is not None:
             if abs(xp_value - previous_xp) / previous_xp <= 0.5:
-                print(f"[OCR Success] Method: {method_name}, XP: {xp_value}, Next Level XP: {next_level_xp}")
-                break
+                if len(xp_values) == 2 and xp_values[0] == xp_values[1]:
+                    return xp_value
 
     xp_value = (
         min(xp_values, key=lambda x: abs(x - previous_xp))
@@ -249,9 +270,39 @@ def parse_tribute_cost(text) -> Optional[int]:
 
     return None
 
+def _on_map_completed(event):
+    map = event["map"]
+    if not map or not map.xph or map.is_tower() or map.is_unlockable_hideout():
+        return
+    recent_xph = get_recent_xph()
+    (rating, percent_diff) = _rate_map_completion_xph(map.xph, recent_xph)
+    tts_engine.say(f"map completed: {map.map_label}. {rating}")
+    threading.Thread(target=tts_engine.runAndWait).start()
+
+def _rate_map_completion_xph(map_xph, recent_xph):
+    percent_diff = ((map_xph - recent_xph) / recent_xph) * 100
+    rating = None
+    if percent_diff >= 150:
+        rating = "amazing"
+    elif percent_diff >= 75:
+        rating = "fantastic"
+    elif percent_diff >= 50:
+        rating = "great"
+    elif percent_diff > 20:
+        rating = "above average"
+    elif percent_diff >= -20 and percent_diff <= 20:
+        rating = "solid"
+    elif percent_diff <= -50:
+        rating = "bad"
+    elif percent_diff < -75:
+        rating = "terrible"
+    elif percent_diff < -20:
+        rating = "below average"
+    return (rating, percent_diff)
 
 if __name__ == "__main__":
     try:
+        events.on("map_completed", _on_map_completed)
         thread = threading.Thread(target=process_ocr_queue).start()
         tts_engine = pyttsx3.init()
         # tts_engine.startLoop()

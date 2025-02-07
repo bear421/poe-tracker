@@ -8,6 +8,8 @@ import json
 class ModType(Enum):
     ENCHANT = "enchant"
     IMPLICIT = "implicit"
+    PREFIX = "prefix"
+    SUFFIX = "suffix"
     AFFIX = "affix"
     CRAFTED = "crafted"
     UNKNOWN = "unknown"
@@ -54,6 +56,23 @@ class Mod:
             type=ModType.UNKNOWN,  # Since we don't store type in dict
             value=data.get("value")
         )
+
+@dataclass
+class ModSpec:
+    pattern: str
+    range: Optional[tuple[float, float]]
+    rank: Optional[int]
+    name: Optional[str]
+
+@dataclass
+class ModData:
+    specs: list[ModSpec]
+    type: ModType
+
+    def __post_init__(self):
+        if not self.specs:
+            raise ValueError("must have at least one mod spec")
+
 
 @dataclass
 class Item:

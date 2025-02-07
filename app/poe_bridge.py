@@ -14,6 +14,9 @@ from ladder_api import fetch_data
 from instance_tracker import InstanceTracker, MapInstance, XPSnapshot
 from collections import deque
 from dataclasses import dataclass
+from PIL import Image
+import functools
+from PySide6.QtGui import QPixmap, QImage
 
 USER_DATA_PATH = "user_data"
 LOG_FILE_PATH = os.path.join(USER_DATA_PATH, "poe_xp_tracker.json")
@@ -33,6 +36,17 @@ class Encounter:
     data: {}
     screenshot_path: Optional[str]
     snapshot: Optional[XPSnapshot]
+
+    @functools.cached_property
+    def q_thumbnail(self):
+        if not self.screenshot_path:
+            return None
+        thumbnail_path = f"{os.path.splitext(self.screenshot_path)[0]}_thumbnail.jpg"
+        if not os.path.exists(thumbnail_path):
+            with Image.open(self.screenshot_path) as img:
+                img.thumbnail((img.width, 200))
+                img.save(thumbnail_path, "JPEG")
+        return QImage(thumbnail_path)
 
     def to_dict(self):
         return {
@@ -145,6 +159,7 @@ def find_poe_logfile():
 apply_xp_snapshot = _tracker.apply_xp_snapshot
 in_hideout = _tracker.in_hideout
 in_map = _tracker.in_map
+get_next_waystone = _tracker.get_next_waystone
 
 def get_recent_maps():
     return _tracker.recent_maps
@@ -157,6 +172,16 @@ def get_recent_encounters():
 
 def get_current_map():
     return _tracker.get_current_map()
+
+def get_recent_xph():
+    maps = list(filter(lambda m: m.xph, get_recent_maps()))
+    sorted_maps = sorted(maps, key=lambda m: m.xph)
+    trim_count = len(sorted_maps) // 10  # Top and bottom 10%
+    trimmed_maps = sorted_maps[trim_count: -trim_count]
+    # use float to avoid overflow
+    total_weight = sum(float(m.span.map_time().total_seconds()) for m in trimmed_maps)
+    weighted_avg = sum(float(m.xph) * float(m.span.map_time().total_seconds()) for m in trimmed_maps)
+    return weighted_avg / total_weight
 
 def parse_all_maps_from_log(log_file=None):
     if not log_file:
@@ -202,7 +227,8 @@ def init():
     events.on("xp_snapshot", _on_xp_snapshot)
     events.on("map_completed", _on_map_completed)
     events.on("map_entered", _on_map_entered)
-    events.on("map_entered", lambda _: threading.Thread(target=_capture_ladder_data).start())
+    events.on("map_entered", lambda _: threading.Thread(target=_capture_ladder_data, daemon=True).start())
+    threading.Thread(target=_capture_ladder_data, daemon=True).start()
 
 def _load_state():
     # recent maps and xp-snapshots are ordered oldest to newest, but we want the 100 most recent ones, therefore, we extendLeft
@@ -305,7 +331,8 @@ def _capture_ladder_data():
         ladder_data = fetch_data(character_name=character_name, account_name=account_name, league=default_league)
         if ladder_data:
             xp = ladder_data.character.experience
-            _tracker.apply_xp_snapshot(xp, source="ladder")
+            if config.get("apply_ladder_xp_snapshot"):
+                _tracker.apply_xp_snapshot(xp, source="ladder")
             events.emit("ladder_data", {"ladder_data": ladder_data})
 
 init()

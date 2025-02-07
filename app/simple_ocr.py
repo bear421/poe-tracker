@@ -8,9 +8,12 @@ import imagehash
 import timeit
 from functools import lru_cache
 import time
+from PySide6.QtGui import QImage, QPainter, QColor, QFontMetrics, QFont, QFontDatabase, QPainterPath
+from PySide6.QtCore import Qt
+
 FONT_PATH = "assets/fonts/Fontin-SmallCaps.otf"
 
-@lru_cache(maxsize=32)
+@lru_cache(maxsize=8)
 def load_font(font_size=25.5, font_path = FONT_PATH):
     return ImageFont.truetype(font_path, font_size)
 
@@ -44,6 +47,45 @@ def text_template(text, font, color=(255, 255, 255), mode="RGB"):
     draw.text((0, 0), text, font=font, fill=color)
     template = np.array(image)
     return cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+
+def load_font_q(font_size=25.5, font_path=FONT_PATH):
+    font_id = QFontDatabase.addApplicationFont(font_path)
+    if font_id < 0:
+        raise RuntimeError(f"Failed to load font from {font_path}")
+    font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
+    font = QFont(font_family, font_size)
+    return font
+
+@lru_cache(maxsize=128)
+def text_template_q(text, font: QFont, color=(255, 255, 255), mode="RGB"):
+    metrics = QFontMetrics(font)
+    text_rect = metrics.boundingRect(text)
+    text_width = text_rect.width()
+    text_height = text_rect.height()
+
+    img = QImage(text_width, text_height, QImage.Format.Format_ARGB32)
+    img.fill(QColor(0, 0, 0))
+
+    painter = QPainter(img)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+
+    if isinstance(color, tuple):
+        qt_color = QColor(*color)
+    elif isinstance(color, QColor):
+        qt_color = color
+    else:
+        raise ValueError("Color must be RGB tuple or QColor")
+
+    path = QPainterPath()
+    path.addText(0, metrics.ascent(), font, text)
+    painter.fillPath(path, qt_color)
+    painter.end()
+
+    ptr = img.constBits()
+    arr = np.array(ptr).reshape(img.height(), img.width(), 4)
+    gray = cv2.cvtColor(arr, cv2.COLOR_BGRA2GRAY)
+    return gray
 
 def _preprocess_image(img):
     """Crop and binarize the text region from the screenshot."""
@@ -79,6 +121,37 @@ def find_anchor_points(image, template, threshold=0.5):
     # Find all positions where the match score exceeds the threshold
     anchor_points = np.where(res >= threshold)
     anchor_points = list(zip(anchor_points[1], anchor_points[0]))  # Convert to (x, y) format
+    return anchor_points
+
+def find_unique_anchor_points(image, template, threshold=0.5, nms_threshold=0.5):
+    """Find unique anchor points of a specific template in the image using Non-Maximum Suppression.
+    
+    Args:
+        image: Source image to search in
+        template: Template image to search for
+        threshold: Minimum correlation threshold for matches (0-1)
+        nms_threshold: IoU threshold for NMS (0-1). Higher values allow more overlapping matches
+    
+    Returns:
+        List of (x,y) anchor points after NMS filtering
+    """
+    if _num_channels(image) != _num_channels(template):
+        raise ValueError(f"Image and template must have the same number of channels, {_num_channels(image)} != {_num_channels(template)}")
+    
+    res = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
+    locations = np.where(res >= threshold)
+    scores = res[locations]
+    
+    if len(scores) == 0:
+        return []
+    
+    h, w = template.shape[:2]
+    boxes = []
+    for y, x in zip(*locations):
+        boxes.append([x, y, x + w, y + h, scores[len(boxes)]])
+    boxes = np.array(boxes)
+    indices = cv2.dnn.NMSBoxes(boxes[:, :4].tolist(), boxes[:, 4].tolist(), threshold, nms_threshold)
+    anchor_points = [(int(boxes[i][0]), int(boxes[i][1])) for i in indices.flatten()]
     return anchor_points
 
 def contains_template(image, template, threshold=0.5):

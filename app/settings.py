@@ -27,6 +27,12 @@ config = config_manager = ConfigManager(path="user_data/config.json", meta={
         "label": "Character name",
         "type": str
     },
+    "apply_ladder_xp_snapshot": {
+        "label": "Apply ladder XP snapshot",
+        "type": bool,
+        "default": False,
+        "description": "If true, will use ladder XP to create XP snapshots (typically inaccurate due to delay)"
+    },
     "twitch_name": {
         "label": "Twitch name",
         "type": str

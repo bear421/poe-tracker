@@ -1,17 +1,23 @@
 from PySide6.QtWidgets import (
-    QApplication, QLabel, QVBoxLayout, QHBoxLayout, QGroupBox, QTableWidget, QTableWidgetItem, QHeaderView, QWidget, QTabWidget, QSizePolicy
+    QApplication, QLabel, QVBoxLayout, QHBoxLayout, QGroupBox, QTableWidget, QTableWidgetItem, QHeaderView, QWidget, QTabWidget, QSizePolicy, QFormLayout
 )
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QFont
 from datetime import datetime, timedelta
 import traceback
 import statistics
-from poe_bridge import get_current_map, get_recent_xp_snapshots, get_recent_maps, events
+from poe_bridge import get_current_map, get_recent_xp_snapshots, get_recent_maps, events, get_recent_xph, get_next_waystone
 from ladder_api import LadderEntry
 from db import conn
 from xp_table import get_level_from_xp, get_xp_range_for_level
 from area_tla import get_threat_indicator
 from util.format import format_number
+
+
+def mk_label(text, font = QFont("Helvetica", 12, QFont.Normal)):
+    label = QLabel(text)
+    label.setFont(font)
+    return label
 
 class OverviewWidget(QWidget):
 
@@ -24,15 +30,17 @@ class OverviewWidget(QWidget):
         self.map_group.setFont(QFont("Helvetica", 12, QFont.Bold))
         map_layout = QVBoxLayout()
         
-        self.xp_label = QLabel("XP Gained: 0")
-        self.xph_label = QLabel("XP/H: 0")
-        self.duration_label = QLabel("Duration: 0:00:00")
+        self.xp_label = mk_label("?")
+        self.xph_label = mk_label("?")
+        self.duration_label = mk_label("?")
         
-        self.mods_layout = QVBoxLayout()
+        map_stats_layout = QFormLayout()
+        map_layout.addLayout(map_stats_layout, 0)
+        map_stats_layout.addRow("XP Gained", self.xp_label)
+        map_stats_layout.addRow("XP/H", self.xph_label)
+        map_stats_layout.addRow("Duration", self.duration_label)
 
-        map_layout.addWidget(self.xp_label, 0)
-        map_layout.addWidget(self.xph_label, 0)
-        map_layout.addWidget(self.duration_label, 0)
+        self.mods_layout = QVBoxLayout()
         map_layout.addLayout(self.mods_layout, 0)
         map_layout.addStretch()
         self.map_group.setLayout(map_layout)
@@ -44,7 +52,7 @@ class OverviewWidget(QWidget):
 
         self.ladder_group = QGroupBox("Ladder")
         self.ladder_group.setFont(QFont("Helvetica", 12, QFont.Bold))
-        self.ladder_layout = QVBoxLayout()
+        self.ladder_layout = QFormLayout()
         self.ladder_group.setLayout(self.ladder_layout)
 
         top_section = QWidget()
@@ -76,19 +84,10 @@ class OverviewWidget(QWidget):
             else:
                 del item
 
-    def _recent_xph(self, maps):
-        sorted_maps = sorted(maps, key=lambda m: m.xph)
-        trim_count = len(sorted_maps) // 10  # Top and bottom 10%
-        trimmed_maps = sorted_maps[trim_count: -trim_count]
-        # use float to avoid overflow
-        total_weight = sum(float(m.span.map_time().total_seconds()) for m in trimmed_maps)
-        weighted_avg = sum(float(m.xph) * float(m.span.map_time().total_seconds()) for m in trimmed_maps)
-        return weighted_avg / total_weight
-
     def update(self):
         try:
             current_map = get_current_map()
-            map_label = f"{current_map.map_label()} - {current_map.area_level}" if current_map else "No current map data"
+            map_label = f"{current_map.map_label} - {current_map.area_level}" if current_map else "No current map data"
             self.map_group.setTitle(map_label)
 
             if current_map:
@@ -99,18 +98,22 @@ class OverviewWidget(QWidget):
                 ) if current_map.span.end is None else current_map.span.map_time()
                 xph = int(xp_gained / total_duration.total_seconds() * 3600) if total_duration.total_seconds() > 0 else 0
                 total_duration = timedelta(seconds=int(total_duration.total_seconds()))
-                if current_map.in_hideout():
-                    self.xp_label.setText(f"XP Gained: {format_number(xp_gained)}")
-                    self.xph_label.setText(f"XP/H: {format_number(xph)}")
-                self.duration_label.setText(f"Duration: {str(total_duration)}")
+                if current_map.in_hideout() and xp_gained > 0:
+                    self.xp_label.setText(f"{format_number(xp_gained)}")
+                    self.xph_label.setText(f"{format_number(xph)}")
+                else:
+                    self.xp_label.setText(f"?")
+                    self.xph_label.setText(f"?")
+                self.duration_label.setText(f"{str(total_duration)}")
 
                 self.clear_layout(self.mods_layout)
-                if current_map.waystone:
-                    for mod in current_map.waystone.affixes:
+                waystone = get_next_waystone() or current_map.waystone
+                if waystone:
+                    for mod in waystone.affixes:
                         ti = get_threat_indicator(mod)
-                        color = "red" if ti and ti.multi > 0 else "green"
-                        mod_label = QLabel(mod.text)
-                        mod_label.setStyleSheet(f"color: {color};")
+                        mod_label = mk_label(mod.text)
+                        bg_color = "rgba(200, 0, 0, 0.2)" if ti and ti.multi > 0 else "rgba(0, 200, 0, 0.2)"
+                        mod_label.setStyleSheet(f"background-color: {bg_color}; border-radius: 3px; padding: 2px;")
                         self.mods_layout.addWidget(mod_label)
 
             encounters = []
@@ -185,21 +188,35 @@ class OverviewWidget(QWidget):
                     xp_delta = xp - xp_lo
                     xpp = xp_delta / (xp_hi - xp_lo) * 100
                     valid_maps = list(filter(lambda m: m.xph, get_recent_maps()))
-                    recent_xph = self._recent_xph(valid_maps)
+                    recent_xph = get_recent_xph()
                     idle_p_list = []
+                    idle_load = []
+                    idle_pause = []
+                    idle_hideout = []
                     for m in valid_maps:
                         idle_p_list.append(m.span.idle_time() / (m.span.map_time() + m.span.idle_time()))
+                        idle_load.append(m.span.load_time)
+                        idle_pause.append(m.span.pause_time)
+                        idle_hideout.append(m.span.hideout_time)
                     idle_p = statistics.median(idle_p_list)
+                    idle_load = statistics.median(idle_load)
+                    idle_pause = statistics.median(idle_pause)
+                    idle_hideout = statistics.median(idle_hideout)
                     if recent_xph > 0:
                         eta = f"{(xp_hi - xp) / recent_xph / (1 - idle_p):.1f}h"
 
-                self.ladder_layout.addWidget(QLabel(f"Character: {character_name}"))
-                self.ladder_layout.addWidget(QLabel(f"Rank: {rank}"))
-                self.ladder_layout.addWidget(QLabel(f"XP: {xpp:.3f}%"))
-                self.ladder_layout.addWidget(QLabel(f"Recent XP/H: {format_number(recent_xph)}"))
-                self.ladder_layout.addWidget(QLabel(f"Idle: {int(idle_p * 100)}%"))
-                self.ladder_layout.addWidget(QLabel(f"ETA: {eta}"))
-                self.ladder_layout.addStretch()
+                self.ladder_layout.addRow("Character", mk_label(f"{character_name}"))
+                self.ladder_layout.addRow("Rank", mk_label(f"{rank}"))
+                if ladder_entry.prev:
+                    xp_delta = ladder_entry.prev.character.experience - ladder_entry.character.experience
+                    self.ladder_layout.addRow("Ahead", mk_label(f"{ladder_entry.prev.character.name} (+{format_number(xp_delta)})"))
+                if ladder_entry.next:
+                    xp_delta = ladder_entry.character.experience - ladder_entry.next.character.experience
+                    self.ladder_layout.addRow("Behind", mk_label(f"{ladder_entry.next.character.name} (-{format_number(xp_delta)})"))
+                self.ladder_layout.addRow("XP", mk_label(f"{xpp:.3f}%"))
+                self.ladder_layout.addRow("Recent XP/H", mk_label(f"{format_number(recent_xph)}"))
+                self.ladder_layout.addRow("Idle", mk_label(f"{int(idle_p * 100)}%"))
+                self.ladder_layout.addRow("ETA", mk_label(f"{eta}"))
 
         except Exception as e:
             print(f"[Error in update_overview]: {str(e)}\n{traceback.format_exc()}")

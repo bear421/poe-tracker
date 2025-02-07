@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt
 import pandas as pd
 from db import conn
 from poe_bridge import events
-
+from util.format import format_number
 
 class QTableWidgetItem_C(QTableWidgetItem):
     def __init__(self, text, comparator=None):
@@ -17,8 +17,15 @@ class QTableWidgetItem_C(QTableWidgetItem):
                 return self.comparator(self.text(), other.text())
             else:
                 try:
-                    self_value = float(self.text().replace(",", ""))
-                    other_value = float(other.text().replace(",", ""))
+                    def parse_formatted_number(text):
+                        text = text.replace(",", "")
+                        multipliers = {"K": 1E3, "M": 1E6, "B": 1E9}
+                        if text[-1] in multipliers:
+                            return float(text[:-1]) * multipliers[text[-1]]
+                        return float(text)
+                    
+                    self_value = parse_formatted_number(self.text())
+                    other_value = parse_formatted_number(other.text())
                     return self_value < other_value
                 except ValueError:
                     return self.text() < other.text()
@@ -53,8 +60,6 @@ class StatsWindow(QWidget):
             ORDER BY data->>'map_name'
         """
         self.stats_df = stats_df = pd.read_sql(query, conn)
-        stats_df["Total XP"] = stats_df["Total XP"].apply(lambda x: f"{x:,}")
-        stats_df["Median XP/H"] = stats_df["Median XP/H"].apply(lambda x: f"{x:,}")
         self.populate_table(stats_df)
 
     def populate_table(self, dataframe):
@@ -64,7 +69,11 @@ class StatsWindow(QWidget):
         self.stats_table.setHorizontalHeaderLabels(dataframe.columns.tolist())
         for row_idx, row in dataframe.iterrows():
             for col_idx, value in enumerate(row):
-                item = QTableWidgetItem_C(str(value))
+                # Format numbers for numeric columns (skip Map Name column)
                 if col_idx > 0:
+                    item = QTableWidgetItem_C(format_number(value))
                     item.setTextAlignment(Qt.AlignRight)
+                else:
+                    item = QTableWidgetItem_C(str(value))
                 self.stats_table.setItem(row_idx, col_idx, item)
+        self.stats_table.resizeRowsToContents()
